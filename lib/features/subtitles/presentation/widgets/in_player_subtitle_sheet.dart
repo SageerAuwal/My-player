@@ -1,10 +1,12 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:media_kit/media_kit.dart';
 import '../../../../core/models/media_item.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/glass_panel.dart';
 import '../../../../core/widgets/glowing_button.dart';
+import '../../../video/controller/playback_controller.dart';
 import '../../controller/subtitle_controller.dart';
 
 class InPlayerSubtitleSheet extends ConsumerWidget {
@@ -45,13 +47,18 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
     final progress = ref.watch(transcriptionProgressProvider);
     final delayMs = ref.watch(subtitleDelayMsProvider);
     final fontSize = ref.watch(subtitleFontSizeProvider);
+    final playbackService = ref.watch(playbackServiceProvider);
 
     final isTranscribing = progress.isTranscribing;
     final companionFile = _getCompanionSubtitleFile();
 
+    // Get real embedded subtitle tracks from media_kit player
+    final subtitleTracks = playbackService.player.state.tracks.subtitle;
+    final currentTrack = playbackService.player.state.track.subtitle;
+
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.95),
+        color: AppColors.surface.withOpacity(0.96),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         border: Border.all(color: AppColors.borderLight, width: 1),
       ),
@@ -112,6 +119,9 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
                       activeColor: AppColors.primary,
                       onChanged: (val) {
                         ref.read(isSubtitlesEnabledProvider.notifier).state = val;
+                        if (!val) {
+                          playbackService.player.setSubtitleTrack(SubtitleTrack.no());
+                        }
                       },
                     ),
                   ],
@@ -120,7 +130,64 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
             ),
             const Divider(color: AppColors.borderLight, height: 24),
 
-            // 1. Companion Subtitle Found Auto-Detect Card
+            // 1. Embedded Subtitle Tracks inside the video container (MKV/MP4/WEBM)
+            if (subtitleTracks.isNotEmpty && subtitleTracks.length > 1) ...[
+              GlassPanel(
+                borderRadius: 16,
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.video_library_rounded, color: AppColors.primary, size: 18),
+                        SizedBox(width: 8),
+                        Text(
+                          'Embedded Tracks in Video',
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: subtitleTracks.map((track) {
+                        final isSelected = currentTrack.id == track.id;
+                        final label = track.title ?? track.language ?? (track.id == 'no' ? 'Disabled' : 'Track ${track.id}');
+                        return ChoiceChip(
+                          label: Text(label),
+                          selected: isSelected,
+                          selectedColor: AppColors.primary.withOpacity(0.25),
+                          backgroundColor: AppColors.surfaceElevated,
+                          labelStyle: TextStyle(
+                            color: isSelected ? AppColors.primary : AppColors.textPrimary,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            fontSize: 12,
+                          ),
+                          side: BorderSide(
+                            color: isSelected ? AppColors.primary : AppColors.borderLight,
+                          ),
+                          onSelected: (selected) async {
+                            if (selected) {
+                              await playbackService.player.setSubtitleTrack(track);
+                              ref.read(isSubtitlesEnabledProvider.notifier).state = track.id != 'no';
+                            }
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // 2. Companion Subtitle Auto-Detect Card
             if (companionFile != null && segments.isEmpty) ...[
               Container(
                 padding: const EdgeInsets.all(12),
@@ -159,6 +226,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
                       ),
                       onPressed: () async {
                         await ref.read(subtitleNotifierProvider.notifier).loadFromFile(companionFile);
+                        await playbackService.player.setSubtitleTrack(SubtitleTrack.uri(companionFile.path));
                         ref.read(isSubtitlesEnabledProvider.notifier).state = true;
                       },
                       child: const Text('Load', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
@@ -169,7 +237,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
               const SizedBox(height: 12),
             ],
 
-            // 2. Import External Subtitle File (.srt, .vtt)
+            // 3. Import External Subtitle File (.srt, .vtt)
             GlassPanel(
               borderRadius: 16,
               padding: const EdgeInsets.all(14),
@@ -197,7 +265,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
                   ),
                   const SizedBox(height: 12),
                   InkWell(
-                    onTap: () => _showFilePickerModal(context, ref),
+                    onTap: () => _showFilePickerModal(context, ref, playbackService),
                     borderRadius: BorderRadius.circular(10),
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
@@ -224,68 +292,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
 
-            // 3. Auto-Generate Subtitles (On-Device AI) Section
-            GlassPanel(
-              borderRadius: 16,
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.auto_awesome, color: AppColors.primary, size: 18),
-                      SizedBox(width: 8),
-                      Text(
-                        'On-Device AI Transcription',
-                        style: TextStyle(
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Directly analyzes the video file on your device to create timed subtitles. Works with headphones or on mute.',
-                    style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                  ),
-                  const SizedBox(height: 12),
-                  if (isTranscribing) ...[
-                    LinearProgressIndicator(
-                      value: progress.progress > 0 ? progress.progress : null,
-                      color: AppColors.primary,
-                      backgroundColor: AppColors.surfaceElevated,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      progress.status,
-                      style: const TextStyle(color: AppColors.primary, fontSize: 12),
-                    ),
-                  ] else ...[
-                    GlowingButton(
-                      onPressed: () {
-                        ref.read(subtitleNotifierProvider.notifier).startTranscription(mediaItem);
-                      },
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.psychology_rounded, color: Colors.black, size: 18),
-                          const SizedBox(width: 8),
-                          Text(
-                            segments.isEmpty ? 'Analyze Video & Generate Subtitles' : 'Re-Analyze Video with AI',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            // 2. Active Status & Local File Loading
+            // 4. Active Loaded Status
             if (segments.isNotEmpty) ...[
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -300,7 +307,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        '${segments.length} caption lines loaded and active',
+                        '${segments.length} captions active',
                         style: const TextStyle(color: AppColors.success, fontSize: 12, fontWeight: FontWeight.w600),
                       ),
                     ),
@@ -309,6 +316,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
                       tooltip: 'Clear Subtitles',
                       onPressed: () {
                         ref.read(subtitleNotifierProvider.notifier).clearSubtitles();
+                        playbackService.player.setSubtitleTrack(SubtitleTrack.no());
                       },
                     ),
                   ],
@@ -317,7 +325,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
               const SizedBox(height: 14),
             ],
 
-            // 3. Subtitle Customization (Delay & Size)
+            // 5. Subtitle Sync & Appearance
             const Text(
               'Sync & Appearance',
               style: TextStyle(
@@ -427,8 +435,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
     );
   }
 
-  void _showFilePickerModal(BuildContext context, WidgetRef ref) {
-    // Scan directory of mediaItem for subtitle files
+  void _showFilePickerModal(BuildContext context, WidgetRef ref, dynamic playbackService) {
     List<File> localSubs = [];
     try {
       final parentDir = File(mediaItem.path).parent;
@@ -482,6 +489,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
                     trailing: const Icon(Icons.arrow_forward_ios_rounded, color: AppColors.textSecondary, size: 14),
                     onTap: () async {
                       await ref.read(subtitleNotifierProvider.notifier).loadFromFile(file);
+                      await playbackService.player.setSubtitleTrack(SubtitleTrack.uri(file.path));
                       ref.read(isSubtitlesEnabledProvider.notifier).state = true;
                       if (ctx.mounted) Navigator.of(ctx).pop();
                     },
@@ -509,6 +517,7 @@ class InPlayerSubtitleSheet extends ConsumerWidget {
                         final file = File(path);
                         if (file.existsSync()) {
                           await ref.read(subtitleNotifierProvider.notifier).loadFromFile(file);
+                          await playbackService.player.setSubtitleTrack(SubtitleTrack.uri(file.path));
                           ref.read(isSubtitlesEnabledProvider.notifier).state = true;
                           if (ctx.mounted) Navigator.of(ctx).pop();
                         } else {
