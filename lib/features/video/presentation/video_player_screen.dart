@@ -48,6 +48,8 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
   bool _showRightDoubleTap = false;
   bool _isFastForwarding = false;
   double _preFastForwardSpeed = 1.0;
+  bool _showLockOverlay = true;
+  Timer? _lockOverlayTimer;
 
   @override
   void initState() {
@@ -79,9 +81,17 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
     });
   }
 
+  void _startLockOverlayTimer() {
+    _lockOverlayTimer?.cancel();
+    _lockOverlayTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _showLockOverlay = false);
+    });
+  }
+
   @override
   void dispose() {
     _controlsTimer?.cancel();
+    _lockOverlayTimer?.cancel();
     ref.read(playbackServiceProvider).player.stop();
     ref.read(playbackControllerProvider.notifier).stop();
     ref.read(systemMediaServiceProvider).setVideoActive(false);
@@ -208,6 +218,12 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () {
+              if (playbackState.isLocked) {
+                setState(() => _showLockOverlay = true);
+                _startLockOverlayTimer();
+                _showToast('Screen Locked — Tap lock icon to unlock');
+                return;
+              }
               ref.read(playbackControllerProvider.notifier).toggleControls();
               final isVis = ref.read(playbackControllerProvider).isControlsVisible;
               if (isVis) {
@@ -524,6 +540,9 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
                           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                           onPressed: () {
                             ref.read(playbackControllerProvider.notifier).toggleLock();
+                            setState(() => _showLockOverlay = true);
+                            _startLockOverlayTimer();
+                            _showToast('Screen Locked — Tap lock icon to unlock');
                           },
                         ),
                       ],
@@ -714,6 +733,50 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
                           ],
                         ),
                       ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+          // 8. Floating Unlock Button (Visible when Screen is Locked)
+          if (playbackState.isLocked)
+            Positioned(
+              left: 24,
+              top: MediaQuery.of(context).size.height / 2 - 28,
+              child: SafeArea(
+                child: AnimatedOpacity(
+                  opacity: _showLockOverlay ? 1.0 : 0.4,
+                  duration: const Duration(milliseconds: 250),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        ref.read(playbackControllerProvider.notifier).toggleLock();
+                        HapticFeedback.mediumImpact();
+                        _showToast('Screen Unlocked');
+                      },
+                      borderRadius: BorderRadius.circular(30),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.85),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppColors.primary, width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.primary.withOpacity(0.5),
+                              blurRadius: 16,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.lock_rounded,
+                          color: AppColors.primary,
+                          size: 26,
+                        ),
+                      ),
                     ),
                   ),
                 ),
